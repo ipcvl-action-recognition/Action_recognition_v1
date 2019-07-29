@@ -1,72 +1,130 @@
-import torch.nn as nn
 import torch
-import math
-from torchvision import transforms
-from torchvision import models
-import torch.nn.functional as F
-import cv2
-import numpy as np
-from torch.autograd import Variable
+import torch.nn as nn
+
 
 class C3DNet(nn.Module):
-    def __init__(self):
+    """The C3D Networks"""
+
+    def __init__(self, pretrained=False):
         super(C3DNet, self).__init__()
 
-        self.layer1 = nn.Sequential(
-            nn.Conv3d(in_channels=3, out_channels=64, kernel_size=(3, 3, 3), stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool3d(kernel_size=(1, 2, 2), stride=(1, 2, 2)))
-        self.layer2 = nn.Sequential(
-            nn.Conv3d(in_channels=64, out_channels=128, kernel_size=(3, 3, 3), stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2)))
-        self.layer3 = nn.Sequential(
-            nn.Conv3d(in_channels=128, out_channels=256, kernel_size=(3, 3, 3), stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv3d(in_channels=256, out_channels=256, kernel_size=(3, 3, 3), stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2)))
-        self.layer4 = nn.Sequential(
-            nn.Conv3d(in_channels=256, out_channels=512, kernel_size=(3, 3, 3), stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv3d(in_channels=512, out_channels=512, kernel_size=(3, 3, 3), stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2)))
-        self.layer5 = nn.Sequential(
-            nn.Conv3d(in_channels=512, out_channels=512, kernel_size=(3, 3, 3), stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv3d(in_channels=512, out_channels=512, kernel_size=(3, 3, 3), stride=1, padding=1),
-            nn.ReLU(),
-            # nn.AdaptiveAvgPool3d(1))
-            nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2), padding=(0, 1, 1)))
-        self.fc1 = nn.Linear(512*4*4, 4096)
-        self.fc2 = nn.Linear(4096, 4096)
-        self.fc3 = nn.Linear(4096, 101)
+        self.conv1 = nn.Conv3d(3, 64, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+        self.norm1 = nn.BatchNorm3d(64)
+        self.pool1 = nn.MaxPool3d(kernel_size=(1, 2, 2), stride=(1, 2, 2))
+
+
+        self.conv2 = nn.Conv3d(64, 128, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+        self.norm2 = nn.BatchNorm3d(128)
+        self.pool2 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2))
+
+        self.conv3a = nn.Conv3d(128, 256, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+        self.norm3a = nn.BatchNorm3d(256)
+
+        self.conv3b = nn.Conv3d(256, 256, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+        self.norm3b = nn.BatchNorm3d(256)
+        self.pool3 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2))
+
+        self.conv4a = nn.Conv3d(256, 512, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+        self.norm4a = nn.BatchNorm3d(512)
+
+        self.conv4b = nn.Conv3d(512, 512, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+        self.norm4b = nn.BatchNorm3d(512)
+
+        self.pool4 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2))
+
+        self.conv5a = nn.Conv3d(512, 1024, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+        self.norm5a = nn.BatchNorm3d(1024)
+
+        self.conv5b = nn.Conv3d(1024, 1024, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+        self.norm5b = nn.BatchNorm3d(1024)
+
+        self.pool5 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2), padding=(0, 1, 1))
+
+        self.conv6a = nn.Conv3d(1024, 1024, kernel_size=(3, 3, 3), padding=(1, 1, 1))
+        self.norm6a = nn.BatchNorm3d(1024)
+        self.pool6 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2), padding=(0, 1, 1))        
+
+
+        self.conv7a = nn.Conv3d(1024, 512, kernel_size=(1, 1, 1), padding=(1, 1, 1))
+        self.norm7a = nn.BatchNorm3d(512)
+        self.pool7 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2), padding=(0, 1, 1))        
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc_6 = nn.Linear(512, 1024)
+        self.fc_7 = nn.Linear(1024, 1024)
+        self.fc_8 = nn.Linear(1024, 1)
+
+        self.fc6 = nn.Linear(8192, 4096)
+        self.fc7 = nn.Linear(4096, 4096)
+        
+        self.fc8 = nn.Linear(4096, 1)
+
+        self.dropout = nn.Dropout(p=0.5)
+
+        self.relu = nn.ReLU()
+
         self.__init_weight()
+
+        self.sigmoid = nn.Sigmoid()
+        self.softmax = nn.Softmax()
+        #if pretrained:
+        #    self.__load_pretrained_weights()
+
+        #self.softmax = nn.Softmax(dim=1)
+
     def forward(self, x):
-        # b, c, l, w, h
-        # print(x.shape)
-        x = self.layer1(x)
-        # print(x.shape)
-        x = self.layer2(x)
-        # print(x.shape)
-        x = self.layer3(x)
-        # print(x.shape)
-        x = self.layer4(x)
-        # print(x.shape)
-        x = self.layer5(x)
-        # print(x.shape)
-        # print(x.shape)
-        # x = x.view(-1, 512)
-        # print(x.shape)
-        x = x.view(-1, 512 * 1 * 4 * 4)
-        # print(x.shape)
-        x = F.dropout(F.relu(self.fc1(x)), 0.5)
-        x = F.dropout(F.relu(self.fc2(x)), 0.5)
-        x = self.fc3(x)
-        # print(x)
-        x = F.softmax(x, dim=1)
-        return x
+        x = self.relu((self.conv1(x)))
+        # x = self.norm1(x)
+        x = self.pool1(x)
+
+        x = self.relu((self.conv2(x)))
+        # x = self.norm2(x)
+        x = self.pool2(x)
+
+        x = self.relu((self.conv3a(x)))
+        # x = self.norm3a(x)
+        x = self.relu((self.conv3b(x)))
+        # x = self.norm3b(x)
+        x = self.pool3(x)
+
+        x = self.relu((self.conv4a(x)))
+        # x = self.norm4a(x)
+        x = self.relu((self.conv4b(x)))
+        # x = self.norm4b(x)
+        x = self.pool4(x)
+
+        x = self.relu((self.conv5a(x)))
+        # x = self.norm5a(x)
+        x = self.relu((self.conv5b(x)))
+        # x = self.norm5b(x)
+        x = self.pool5(x)
+        
+        #print(x.shape)
+
+        x = self.relu((self.conv6a(x)))
+        # x = self.norm6a(x)
+        x = self.pool6(x)
+
+        x = self.relu((self.conv7a(x)))
+        # x = self.norm7a(x)
+        x = self.pool7(x)
+
+        x = x.squeeze(2)
+        x = self.avg_pool(x)
+        x = x.view(-1, 512)
+        x = self.relu(self.fc_6(x))
+        x = self.dropout(x)
+        x = self.relu(self.fc_7(x))
+        x = self.dropout(x)
+        logits = self.fc_8(x)
+        # x = x.view(-1, 8192)
+        # x = self.relu(self.fc6(x))
+        # x = self.dropout(x)
+        # x = self.relu(self.fc7(x))
+        # x = self.dropout(x)
+
+        # logits = self.fc8(x)
+        
+        return logits#torch.sigmoid(logits)
 
     def __init_weight(self):
         for m in self.modules():
@@ -78,309 +136,66 @@ class C3DNet(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
-class BasicConv3d(nn.Module):
-    def __init__(self, in_planes, out_planes, kernel_size, stride, padding=0):
-        super(BasicConv3d, self).__init__()
-        self.conv = nn.Conv3d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=padding,
-                              bias=False)  # verify bias false
+    def __load_pretrained_weights(self):
+        """Initialiaze network."""
+        corresp_name = {
+            # Conv1
+            "features.0.weight": "conv1.weight",
+            "features.0.bias": "conv1.bias",
+            # Conv2
+            "features.3.weight": "conv2.weight",
+            "features.3.bias": "conv2.bias",
+            # Conv3a
+            "features.6.weight": "conv3a.weight",
+            "features.6.bias": "conv3a.bias",
+            # Conv3b
+            "features.8.weight": "conv3b.weight",
+            "features.8.bias": "conv3b.bias",
+            # Conv4a
+            "features.11.weight": "conv4a.weight",
+            "features.11.bias": "conv4a.bias",
+            # Conv4b
+            "features.13.weight": "conv4b.weight",
+            "features.13.bias": "conv4b.bias",
+            # Conv5a
+            "features.16.weight": "conv5a.weight",
+            "features.16.bias": "conv5a.bias",
+            # Conv5b
+            "features.18.weight": "conv5b.weight",
+            "features.18.bias": "conv5b.bias",
+            # fc6
+            "classifier.0.weight": "fc6.weight",
+            "classifier.0.bias": "fc6.bias",
+            # fc7
+            "classifier.3.weight": "fc7.weight",
+            "classifier.3.bias": "fc7.bias",
+        }
 
-        # verify defalt value in sonnet
-        self.bn = nn.BatchNorm3d(out_planes, eps=1e-3, momentum=0.001, affine=True)
-        self.relu = nn.ReLU(inplace=True)
+        p_dict = torch.load('c3d-pretrained.pth')
+        s_dict = self.state_dict()
+        for name in p_dict:
+            if name not in corresp_name:
+                continue
+            s_dict[corresp_name[name]] = p_dict[name]
+        self.load_state_dict(s_dict)
 
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
-        x = self.relu(x)
-        return x
+def get_1x_lr_params(model):
+    """
+    This generator returns all the parameters for conv and two fc layers of the net.
+    """
+    b = [model.conv1, model.conv2, model.conv3a, model.conv3b, model.conv4a, model.conv4b,
+         model.conv5a, model.conv5b, model.fc6, model.fc7]
+    for i in range(len(b)):
+        for k in b[i].parameters():
+            if k.requires_grad:
+                yield k
 
-class Mixed_3b(nn.Module):
-    def __init__(self):
-        super(Mixed_3b, self).__init__()
-
-        self.branch0 = nn.Sequential(
-            BasicConv3d(192, 64, kernel_size=1, stride=1),
-        )
-        self.branch1 = nn.Sequential(
-            BasicConv3d(192, 96, kernel_size=1, stride=1),
-            BasicConv3d(96, 128, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch2 = nn.Sequential(
-            BasicConv3d(192, 16, kernel_size=1, stride=1),
-            BasicConv3d(16, 32, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch3 = nn.Sequential(
-            nn.MaxPool3d(kernel_size=(3, 3, 3), stride=1, padding=1),
-            BasicConv3d(192, 32, kernel_size=1, stride=1),
-        )
-
-    def forward(self, x):
-        x0 = self.branch0(x)
-        x1 = self.branch1(x)
-        x2 = self.branch2(x)
-        x3 = self.branch3(x)
-        out = torch.cat((x0, x1, x2, x3), 1)
-
-        return out
-
-class Mixed_3c(nn.Module):
-    def __init__(self):
-        super(Mixed_3c, self).__init__()
-        self.branch0 = nn.Sequential(
-            BasicConv3d(256, 128, kernel_size=1, stride=1),
-        )
-        self.branch1 = nn.Sequential(
-            BasicConv3d(256, 128, kernel_size=1, stride=1),
-            BasicConv3d(128, 192, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch2 = nn.Sequential(
-            BasicConv3d(256, 32, kernel_size=1, stride=1),
-            BasicConv3d(32, 96, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch3 = nn.Sequential(
-            nn.MaxPool3d(kernel_size=(3, 3, 3), stride=1, padding=1),
-            BasicConv3d(256, 64, kernel_size=1, stride=1),
-        )
-
-    def forward(self, x):
-        x0 = self.branch0(x)
-        x1 = self.branch1(x)
-        x2 = self.branch2(x)
-        x3 = self.branch3(x)
-        out = torch.cat((x0, x1, x2, x3), 1)
-        return out
-
-class Mixed_4b(nn.Module):
-    def __init__(self):
-        super(Mixed_4b, self).__init__()
-
-        self.branch0 = nn.Sequential(
-            BasicConv3d(480, 192, kernel_size=1, stride=1),
-        )
-        self.branch1 = nn.Sequential(
-            BasicConv3d(480, 96, kernel_size=1, stride=1),
-            BasicConv3d(96, 208, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch2 = nn.Sequential(
-            BasicConv3d(480, 16, kernel_size=1, stride=1),
-            BasicConv3d(16, 48, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch3 = nn.Sequential(
-            nn.MaxPool3d(kernel_size=(3, 3, 3), stride=1, padding=1),
-            BasicConv3d(480, 64, kernel_size=1, stride=1),
-        )
-
-    def forward(self, x):
-        x0 = self.branch0(x)
-        x1 = self.branch1(x)
-        x2 = self.branch2(x)
-        x3 = self.branch3(x)
-        out = torch.cat((x0, x1, x2, x3), 1)
-        return out
-
-class Mixed_4c(nn.Module):
-    def __init__(self):
-        super(Mixed_4c, self).__init__()
-
-        self.branch0 = nn.Sequential(
-            BasicConv3d(512, 160, kernel_size=1, stride=1),
-        )
-        self.branch1 = nn.Sequential(
-            BasicConv3d(512, 112, kernel_size=1, stride=1),
-            BasicConv3d(112, 224, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch2 = nn.Sequential(
-            BasicConv3d(512, 24, kernel_size=1, stride=1),
-            BasicConv3d(24, 64, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch3 = nn.Sequential(
-            nn.MaxPool3d(kernel_size=(3, 3, 3), stride=1, padding=1),
-            BasicConv3d(512, 64, kernel_size=1, stride=1),
-        )
-
-    def forward(self, x):
-        x0 = self.branch0(x)
-        x1 = self.branch1(x)
-        x2 = self.branch2(x)
-        x3 = self.branch3(x)
-        out = torch.cat((x0, x1, x2, x3), 1)
-        return out
-
-class Mixed_4d(nn.Module):
-    def __init__(self):
-        super(Mixed_4d, self).__init__()
-
-        self.branch0 = nn.Sequential(
-            BasicConv3d(512, 128, kernel_size=1, stride=1),
-        )
-        self.branch1 = nn.Sequential(
-            BasicConv3d(512, 128, kernel_size=1, stride=1),
-            BasicConv3d(128, 256, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch2 = nn.Sequential(
-            BasicConv3d(512, 24, kernel_size=1, stride=1),
-            BasicConv3d(24, 64, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch3 = nn.Sequential(
-            nn.MaxPool3d(kernel_size=(3, 3, 3), stride=1, padding=1),
-            BasicConv3d(512, 64, kernel_size=1, stride=1),
-        )
-
-    def forward(self, x):
-        x0 = self.branch0(x)
-        x1 = self.branch1(x)
-        x2 = self.branch2(x)
-        x3 = self.branch3(x)
-        out = torch.cat((x0, x1, x2, x3), 1)
-        return out
-
-class Mixed_4e(nn.Module):
-    def __init__(self):
-        super(Mixed_4e, self).__init__()
-
-        self.branch0 = nn.Sequential(
-            BasicConv3d(512, 112, kernel_size=1, stride=1),
-        )
-        self.branch1 = nn.Sequential(
-            BasicConv3d(512, 144, kernel_size=1, stride=1),
-            BasicConv3d(144, 288, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch2 = nn.Sequential(
-            BasicConv3d(512, 32, kernel_size=1, stride=1),
-            BasicConv3d(32, 64, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch3 = nn.Sequential(
-            nn.MaxPool3d(kernel_size=(3, 3, 3), stride=1, padding=1),
-            BasicConv3d(512, 64, kernel_size=1, stride=1),
-        )
-
-    def forward(self, x):
-        x0 = self.branch0(x)
-        x1 = self.branch1(x)
-        x2 = self.branch2(x)
-        x3 = self.branch3(x)
-        out = torch.cat((x0, x1, x2, x3), 1)
-        return out
-
-class Mixed_4f(nn.Module):
-    def __init__(self):
-        super(Mixed_4f, self).__init__()
-
-        self.branch0 = nn.Sequential(
-            BasicConv3d(528, 256, kernel_size=1, stride=1),
-        )
-        self.branch1 = nn.Sequential(
-            BasicConv3d(528, 160, kernel_size=1, stride=1),
-            BasicConv3d(160, 320, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch2 = nn.Sequential(
-            BasicConv3d(528, 32, kernel_size=1, stride=1),
-            BasicConv3d(32, 128, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch3 = nn.Sequential(
-            nn.MaxPool3d(kernel_size=(3, 3, 3), stride=1, padding=1),
-            BasicConv3d(528, 128, kernel_size=1, stride=1),
-        )
-
-    def forward(self, x):
-        x0 = self.branch0(x)
-        x1 = self.branch1(x)
-        x2 = self.branch2(x)
-        x3 = self.branch3(x)
-        out = torch.cat((x0, x1, x2, x3), 1)
-        return out
-
-class Mixed_5b(nn.Module):
-    def __init__(self):
-        super(Mixed_5b, self).__init__()
-
-        self.branch0 = nn.Sequential(
-            BasicConv3d(832, 256, kernel_size=1, stride=1),
-        )
-        self.branch1 = nn.Sequential(
-            BasicConv3d(832, 160, kernel_size=1, stride=1),
-            BasicConv3d(160, 320, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch2 = nn.Sequential(
-            BasicConv3d(832, 32, kernel_size=1, stride=1),
-            BasicConv3d(32, 128, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch3 = nn.Sequential(
-            nn.MaxPool3d(kernel_size=(3, 3, 3), stride=1, padding=1),
-            BasicConv3d(832, 128, kernel_size=1, stride=1),
-        )
-
-    def forward(self, x):
-        x0 = self.branch0(x)
-        x1 = self.branch1(x)
-        x2 = self.branch2(x)
-        x3 = self.branch3(x)
-        out = torch.cat((x0, x1, x2, x3), 1)
-        return out
-
-class Mixed_5c(nn.Module):
-    def __init__(self):
-        super(Mixed_5c, self).__init__()
-
-        self.branch0 = nn.Sequential(
-            BasicConv3d(832, 384, kernel_size=1, stride=1),
-        )
-        self.branch1 = nn.Sequential(
-            BasicConv3d(832, 192, kernel_size=1, stride=1),
-            BasicConv3d(192, 384, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch2 = nn.Sequential(
-            BasicConv3d(832, 48, kernel_size=1, stride=1),
-            BasicConv3d(48, 128, kernel_size=3, stride=1, padding=1),
-        )
-        self.branch3 = nn.Sequential(
-            nn.MaxPool3d(kernel_size=(3, 3, 3), stride=1, padding=1),
-            BasicConv3d(832, 128, kernel_size=1, stride=1),
-        )
-
-    def forward(self, x):
-        x0 = self.branch0(x)
-        x1 = self.branch1(x)
-        x2 = self.branch2(x)
-        x3 = self.branch3(x)
-        out = torch.cat((x0, x1, x2, x3), 1)
-        return out
-
-class I3D(nn.Module):
-
-    def __init__(self, num_classes=400, dropout_drop_prob = 0.5, input_channel = 3, spatial_squeeze=True):
-        super(I3D, self).__init__()
-        self.features = nn.Sequential(
-            BasicConv3d(input_channel, 64, kernel_size=7, stride=2, padding=3), # (64, 32, 112, 112)
-            nn.MaxPool3d(kernel_size=(1,3,3), stride=(1,2,2), padding=(0,1,1)),  # (64, 32, 56, 56)
-            BasicConv3d(64, 64, kernel_size=1, stride=1), # (64, 32, 56, 56)
-            BasicConv3d(64, 192, kernel_size=3, stride=1, padding=1),  # (192, 32, 56, 56)
-            nn.MaxPool3d(kernel_size=(1,3,3), stride=(1,2,2), padding=(0,1,1)),  # (192, 32, 28, 28)
-            Mixed_3b(), # (256, 32, 28, 28)
-            Mixed_3c(), # (480, 32, 28, 28)
-            nn.MaxPool3d(kernel_size=(3, 3, 3), stride=(2, 2, 2), padding=(1, 1, 1)), # (480, 16, 14, 14)
-            Mixed_4b(),# (512, 16, 14, 14)
-            Mixed_4c(),# (512, 16, 14, 14)
-            Mixed_4d(),# (512, 16, 14, 14)
-            Mixed_4e(),# (528, 16, 14, 14)
-            Mixed_4f(),# (832, 16, 14, 14)
-            nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2), padding=(0, 0, 0)), # (832, 8, 7, 7)
-            Mixed_5b(), # (832, 8, 7, 7)
-            Mixed_5c(), # (1024, 8, 7, 7)
-            nn.AvgPool3d(kernel_size=(2, 7, 7), stride=1),# (1024, 8, 1, 1)
-            nn.Dropout3d(dropout_drop_prob),
-            nn.Conv3d(1024, num_classes, kernel_size=1, stride=1, bias=True),# (400, 8, 1, 1)
-        )
-        self.spatial_squeeze = spatial_squeeze
-        self.softmax = nn.Softmax()
-
-    def forward(self, x):
-        logits = self.features(x)
-        # print(logits.shape)
-        if self.spatial_squeeze:
-            logits = logits.squeeze(3)
-            logits = logits.squeeze(3)
-        averaged_logits = torch.mean(logits, 2)
-        predictions = self.softmax(averaged_logits)
-
-        return predictions, averaged_logits
+def get_10x_lr_params(model):
+    """
+    This generator returns all the parameters for the last fc layer of the net.
+    """
+    b = [model.fc8]
+    for j in range(len(b)):
+        for k in b[j].parameters():
+            if k.requires_grad:
+                yield k
