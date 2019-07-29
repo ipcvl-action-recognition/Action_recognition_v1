@@ -120,8 +120,7 @@ if __name__ == "__main__":
         total_len = 0
         for it, data in enumerate(val_dataLoader):
             with torch.no_grad():
-                x = data[0]
-                val_epoch_losses, acc = test_accuracy(is_validation=True, video=x, folder_path=framefile)
+                val_epoch_losses, acc = test_accuracy(is_validation=True, video_list=data, folder_path=framefile)
 
 
 

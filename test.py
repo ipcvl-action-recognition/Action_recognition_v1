@@ -30,7 +30,7 @@ def frame_labeling(filename):
         line = line.split(' ')
         label_list.append(line[1])
     return label_list
-def test_accuracy(is_validation=False, video=None, folder_path=None):
+def test_accuracy(is_validation=False, video_list=None, folder_path=None):
     model = C3DNet().cuda()
     criterion = torch.nn.BCELoss().cuda()
 
@@ -40,71 +40,71 @@ def test_accuracy(is_validation=False, video=None, folder_path=None):
     model.eval()
 
     video_loss = []
-    # for video in video_list:
-    cap = cv2.VideoCapture(video)
-    retaining = True
-    clip = []
-    video = video.replace("Video", "frame_label")
-    filename = video.replace("mp4", "txt")
-    # label 부분은 함수로 뺴서 따로 처리해서 만들면 될듯
-    label = frame_labeling(filename)
-    frame_number = 0
-    correct = 0
-    val_epoch_losses = []
-    total_len = 0
-    while retaining:
-        retaining, frame = cap.read()
-        if not retaining and frame is None:
-            continue
-        tmp = cv2.resize(frame, (112, 112))
-        tmp = tmp.astype(np.float32)
-        tmp = tmp / 255.0
-        clip.append(tmp)
+    for video in video_list:
+        cap = cv2.VideoCapture(video)
+        retaining = True
+        clip = []
+        video = video.replace("Video", "frame_label")
+        filename = video.replace("mp4", "txt")
+        # label 부분은 함수로 뺴서 따로 처리해서 만들면 될듯
+        label = frame_labeling(filename)
+        frame_number = 0
+        correct = 0
+        val_epoch_losses = []
+        total_len = 0
+        while retaining:
+            retaining, frame = cap.read()
+            if not retaining and frame is None:
+                continue
+            tmp = cv2.resize(frame, (112, 112))
+            tmp = tmp.astype(np.float32)
+            tmp = tmp / 255.0
+            clip.append(tmp)
 
-        if len(clip) == 16:
-            inputs = np.array(clip).astype(np.float32)  # input_shape =  (16, 112, 112, 3)
-            inputs = np.expand_dims(inputs, axis=0)  # input_shape =  (1, 16, 112, 112, 3)
-            inputs = np.transpose(inputs, (0, 4, 1, 2, 3))  # input_shape =  (1, 3, 16, 112, 112)
-            inputs = torch.from_numpy(inputs)
-            inputs = torch.autograd.Variable(inputs, requires_grad=False).cuda()
-            with torch.no_grad():
-                outputs = model.forward(inputs)
+            if len(clip) == 16:
+                inputs = np.array(clip).astype(np.float32)  # input_shape =  (16, 112, 112, 3)
+                inputs = np.expand_dims(inputs, axis=0)  # input_shape =  (1, 16, 112, 112, 3)
+                inputs = np.transpose(inputs, (0, 4, 1, 2, 3))  # input_shape =  (1, 3, 16, 112, 112)
+                inputs = torch.from_numpy(inputs)
+                inputs = torch.autograd.Variable(inputs, requires_grad=False).cuda()
+                with torch.no_grad():
+                    outputs = model.forward(inputs)
 
-            if not is_validation:
-                outputs = np.squeeze(torch.sigmoid(outputs).cpu().numpy())
-                output_frame = cv2.resize(frame, dsize=(640, 480))
-                if (outputs > 0.5):
-                    prob = outputs
-                    cv2.putText(output_frame, "FallDown(prob: %.4f)" % prob, (20, 40),
-                                cv2.FONT_HERSHEY_COMPLEX, 1.2,
-                                (0, 0, 255), 2)
+                if not is_validation:
+                    outputs = np.squeeze(torch.sigmoid(outputs).cpu().numpy())
+                    output_frame = cv2.resize(frame, dsize=(640, 480))
+                    if (outputs > 0.5):
+                        prob = outputs
+                        cv2.putText(output_frame, "FallDown(prob: %.4f)" % prob, (20, 40),
+                                    cv2.FONT_HERSHEY_COMPLEX, 1.2,
+                                    (0, 0, 255), 2)
+                    else:
+                        prob = 1.0 - outputs
+                        cv2.putText(output_frame, "None(prob: %.4f)" % prob, (20, 40),
+                                    cv2.FONT_HERSHEY_COMPLEX, 1.2,
+                                    (255, 0, 0), 2)
+
+
+                    cv2.imshow('result', output_frame)
+                    cv2.waitKey(1)
                 else:
-                    prob = 1.0 - outputs
-                    cv2.putText(output_frame, "None(prob: %.4f)" % prob, (20, 40),
-                                cv2.FONT_HERSHEY_COMPLEX, 1.2,
-                                (255, 0, 0), 2)
+                    y_pred = torch.sigmoid(outputs)
+                    y_frame = torch.from_numpy(np.array([label[frame_number + 15]]).astype(int)).cuda()
+                    # print(y_frame)
+                    loss = criterion(y_pred.squeeze(0), y_frame.float()).cuda()
+                    y_pred_index = torch.round(y_pred).int()
+                    y_pred_index = torch.transpose(y_pred_index, 0, 1)
+                    y_frame = y_frame.int()
+                    correct += (y_pred_index == y_frame).sum().item()
+                    val_epoch_losses.append(loss.item())
 
-
-                cv2.imshow('result', output_frame)
-                cv2.waitKey(1)
-            else:
-                y_pred = torch.sigmoid(outputs)
-                y_frame = torch.from_numpy(np.array([label[frame_number + 15]]).astype(int)).cuda()
-                # print(y_frame)
-                loss = criterion(y_pred.squeeze(0), y_frame.float()).cuda()
-                y_pred_index = torch.round(y_pred).int()
-                y_pred_index = torch.transpose(y_pred_index, 0, 1)
-                y_frame = y_frame.int()
-                correct += (y_pred_index == y_frame).sum().item()
-                val_epoch_losses.append(loss.item())
-
-            clip.pop(0)
-            frame_number+=1
-            total_len += 1
-    # video_loss.append(np.mean(val_epoch_losses))
+                clip.pop(0)
+                frame_number+=1
+                total_len += 1
+        video_loss.append(np.mean(val_epoch_losses))
     accuracy = correct / total_len * 100
     if is_validation:
-        return np.mean(val_epoch_losses), accuracy
+        return np.mean(video_loss), accuracy
 def main():
     # init model
     model = C3DNet().cuda()
